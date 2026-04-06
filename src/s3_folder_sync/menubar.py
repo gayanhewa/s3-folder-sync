@@ -11,8 +11,8 @@ import rumps
 
 from s3_folder_sync.config import Config
 from s3_folder_sync.ignore import IgnoreMatcher
-from s3_folder_sync.s3client import S3Client
 from s3_folder_sync.state import StateDB
+from s3_folder_sync.storage import create_storage_client
 from s3_folder_sync.sync_engine import SyncEngine
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class SyncMenuBarApp(rumps.App):
         try:
             self.config = Config.load(self.watch_path)
             self.db = StateDB(self.config.db_path)
-            s3 = S3Client(self.config)
+            s3 = create_storage_client(self.config)
             self.engine = SyncEngine(self.config, s3, self.db)
             self._update_status("Ready")
         except FileNotFoundError:

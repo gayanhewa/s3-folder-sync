@@ -11,8 +11,8 @@ from pathlib import Path
 
 from s3_folder_sync.config import Config
 from s3_folder_sync.ignore import IgnoreMatcher
-from s3_folder_sync.s3client import S3Client
 from s3_folder_sync.state import StateDB
+from s3_folder_sync.storage import create_storage_client
 from s3_folder_sync.sync_engine import SyncEngine
 from s3_folder_sync.watcher import FileWatcher
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class SyncDaemon:
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.s3 = S3Client(config)
+        self.s3 = create_storage_client(config)
         self.db = StateDB(config.db_path)
         self.engine = SyncEngine(config, self.s3, self.db)
         self.ignore = IgnoreMatcher(config.ignore_patterns)

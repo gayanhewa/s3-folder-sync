@@ -32,6 +32,7 @@ class StorageConfig:
     region: str = "us-east-1"
     access_key: str = ""
     secret_key: str = ""
+    backend: str = "s3"  # "s3" or "bunny"
 
 
 @dataclass
@@ -87,6 +88,7 @@ class Config:
                 "region": self.storage.region,
                 "access_key": self.storage.access_key,
                 "secret_key": self.storage.secret_key,
+                "backend": self.storage.backend,
             },
             "sync": {
                 "interval": self.sync.interval,
@@ -123,8 +125,12 @@ class Config:
         machine_data = data.get("machine", {})
         ignore_data = data.get("ignore", {})
 
+        storage_fields = {
+            k: v for k, v in storage_data.items()
+            if k in StorageConfig.__dataclass_fields__
+        }
         return cls(
-            storage=StorageConfig(**storage_data),
+            storage=StorageConfig(**storage_fields),
             sync=SyncConfig(**{
                 k: v for k, v in sync_data.items()
                 if k in ("interval", "debounce", "delete_grace_period")
@@ -145,6 +151,7 @@ class Config:
         access_key: str = "",
         secret_key: str = "",
         machine_id: str | None = None,
+        backend: str = "s3",
     ) -> Config:
         watch_path = str(Path(watch_path).resolve())
         config = cls(
@@ -155,6 +162,7 @@ class Config:
                 region=region,
                 access_key=access_key,
                 secret_key=secret_key,
+                backend=backend,
             ),
             machine=MachineConfig(id=machine_id or socket.gethostname()),
             watch_path=watch_path,

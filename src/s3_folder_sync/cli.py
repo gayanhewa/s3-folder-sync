@@ -10,8 +10,8 @@ import click
 
 from s3_folder_sync.config import Config
 from s3_folder_sync.daemon import SyncDaemon
-from s3_folder_sync.s3client import S3Client
 from s3_folder_sync.state import StateDB
+from s3_folder_sync.storage import create_storage_client
 from s3_folder_sync.sync_engine import SyncEngine
 
 
@@ -40,6 +40,7 @@ def main(verbose: bool) -> None:
 @click.option("--access-key", default="", help="Access key (or use AWS_ACCESS_KEY_ID env)")
 @click.option("--secret-key", default="", help="Secret key (or use AWS_SECRET_ACCESS_KEY env)")
 @click.option("--machine-id", default=None, help="Unique machine identifier")
+@click.option("--backend", default="s3", type=click.Choice(["s3", "bunny"]), help="Storage backend")
 def init(
     path: str,
     endpoint: str,
@@ -49,6 +50,7 @@ def init(
     access_key: str,
     secret_key: str,
     machine_id: str | None,
+    backend: str,
 ) -> None:
     """Initialize sync configuration for a directory."""
     watch_path = Path(path).resolve()
@@ -65,9 +67,11 @@ def init(
         access_key=access_key,
         secret_key=secret_key,
         machine_id=machine_id,
+        backend=backend,
     )
 
     click.echo(f"Initialized s3-folder-sync in {config.sync_dir}")
+    click.echo(f"  Backend: {config.storage.backend}")
     click.echo(f"  Machine ID: {config.machine.id}")
     click.echo(f"  Bucket: {config.storage.bucket}")
     click.echo(f"  Prefix: {config.storage.prefix or '(none)'}")
@@ -131,9 +135,9 @@ def status(path: str) -> None:
 def sync_now(path: str) -> None:
     """Force an immediate sync cycle."""
     config = _load_config(path)
-    s3 = S3Client(config)
+    client = create_storage_client(config)
     db = StateDB(config.db_path)
-    engine = SyncEngine(config, s3, db)
+    engine = SyncEngine(config, client, db)
 
     click.echo("Running sync cycle...")
     conflicts = engine.run_cycle()
