@@ -158,6 +158,18 @@ s3-folder-sync menubar --path ~/Workspace
 |------|-------------|
 | `-v` / `--verbose` | Enable debug logging |
 
+## Important: First Sync on a New Machine
+
+When setting up a second (or third) machine, always run a one-off `sync` before starting the daemon:
+
+```bash
+s3-folder-sync init --path ~/Workspace ...
+s3-folder-sync sync --path ~/Workspace   # pull all existing files first
+s3-folder-sync start --path ~/Workspace  # then start the daemon
+```
+
+If you skip the initial `sync` and jump straight to `start`, the daemon will still pull everything on its first cycle. However, if the folder already contains files (e.g. a partial copy), those files may be detected as conflicts. Running `sync` first ensures a clean baseline before the daemon takes over.
+
 ## How Sync Works
 
 Each sync cycle:
