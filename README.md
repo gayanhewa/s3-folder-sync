@@ -13,77 +13,171 @@ Sync a local folder to S3-compatible object storage across multiple machines. De
 ## Features
 
 - **Real-time sync** — watches for file changes with debounce for rapid saves (Obsidian-friendly)
-- **Conflict resolution** — both sides edited? Remote wins as canonical, local saved as `.conflict.*` file. No data is ever lost.
-- **Soft deletes** — deleted files go to a local trash folder with a grace period before propagating
-- **S3-compatible** — works with AWS S3, Bunny.net, Cloudflare R2, MinIO, Backblaze B2, etc.
+- **Conflict resolution** — both sides edited? Remote wins as canonical, local saved as `.conflict.*` file. No data is ever lost. Conflict files are local-only and never synced.
+- **Soft deletes** — deleted files go to a local trash folder with a configurable grace period before propagating
+- **Multiple backends** — supports S3-compatible storage (AWS S3, Cloudflare R2, MinIO, Backblaze B2) and Bunny.net Edge Storage natively
 - **Background daemon** — runs as a background process, syncs every 10 seconds by default
+- **Menu bar app** — optional macOS menu bar icon for at-a-glance status (requires `rumps`)
 - **Ignore patterns** — skip `.git/`, `node_modules/`, `.DS_Store`, etc.
 
 ## Install
 
 ```bash
-# From source
+git clone https://github.com/gayanhewa/s3-folder-sync.git
+cd s3-folder-sync
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# Or with pipx (recommended, isolated environment)
+# Optional: menu bar support
+pip install -e ".[menubar]"
+```
+
+Or install directly with pipx (no clone needed):
+
+```bash
 pipx install git+https://github.com/gayanhewa/s3-folder-sync.git
 ```
 
 Requires Python 3.11+.
 
-## Quick Start
+## CLI Reference
+
+### `s3-folder-sync init`
+
+Initialize sync configuration for a directory. Creates a `.s3sync/` folder containing `config.toml` and sets up the storage connection.
 
 ```bash
-# Initialize sync for a directory
-s3-folder-sync init --path ~/Workspace \
+s3-folder-sync init \
+  --path ~/Workspace \
   --endpoint https://s3.amazonaws.com \
   --bucket my-sync-bucket \
-  --machine-id mac-1
+  --region us-east-1 \
+  --access-key "YOUR_ACCESS_KEY" \
+  --secret-key "YOUR_SECRET_KEY" \
+  --machine-id mac-1 \
+  --backend s3
+```
 
-# Start syncing (foreground)
+| Flag | Description |
+|------|-------------|
+| `--path` | Directory to sync (default: current directory) |
+| `--endpoint` | Storage endpoint URL |
+| `--bucket` | Bucket or storage zone name |
+| `--prefix` | Optional key prefix within the bucket |
+| `--region` | Storage region (default: `us-east-1`) |
+| `--access-key` | Access key / API key |
+| `--secret-key` | Secret key / API password |
+| `--machine-id` | Unique identifier for this machine (default: hostname) |
+| `--backend` | Storage backend: `s3` or `bunny` (default: `s3`) |
+
+### `s3-folder-sync start`
+
+Start the sync daemon. Watches the folder for changes and syncs every 10 seconds (configurable).
+
+```bash
+# Foreground (logs to terminal, Ctrl+C to stop)
 s3-folder-sync start --path ~/Workspace
 
-# Start syncing (background daemon)
+# Background (detaches from terminal, writes to .s3sync/daemon.log)
 s3-folder-sync start --path ~/Workspace -d
+```
 
-# Check status
-s3-folder-sync status --path ~/Workspace
+| Flag | Description |
+|------|-------------|
+| `--path` | Synced directory |
+| `-d` | Run as background daemon |
 
-# Force a one-shot sync
-s3-folder-sync sync --path ~/Workspace
+**Foreground vs background:**
 
-# List conflict files
-s3-folder-sync conflicts --path ~/Workspace
+- **Foreground** (`start`) — the process runs in your terminal. You see logs in real time. Press `Ctrl+C` to stop. Use this when testing or debugging.
+- **Background** (`start -d`) — the process detaches from the terminal and runs silently. Logs go to `.s3sync/daemon.log`. The process survives closing the terminal. Use `s3-folder-sync stop` to shut it down. Use this for day-to-day operation.
 
-# Stop background daemon
+Both modes do exactly the same syncing. The only difference is where the process runs and where logs go.
+
+### `s3-folder-sync stop`
+
+Stop a running background daemon.
+
+```bash
 s3-folder-sync stop --path ~/Workspace
 ```
 
-## CLI Reference
+Has no effect on foreground processes (use `Ctrl+C` for those).
 
-| Command      | Description                          |
-|-------------|--------------------------------------|
-| `init`      | Initialize config in `.s3sync/`      |
-| `start`     | Start sync daemon (`-d` for background) |
-| `stop`      | Stop background daemon               |
-| `status`    | Show sync status and tracked files   |
-| `sync`      | Force immediate sync cycle           |
-| `conflicts` | List unresolved conflict files       |
+### `s3-folder-sync status`
 
-Global flags: `-v` / `--verbose` for debug logging.
+Show current sync status: machine ID, bucket, whether the daemon is running, and how many files are tracked.
+
+```bash
+s3-folder-sync status --path ~/Workspace
+```
+
+Example output:
+
+```
+Watch path: /Users/you/Workspace
+Machine ID: mac-1
+Bucket: my-sync-bucket
+Daemon: running (PID 12345)
+Tracked files: 42 synced, 0 pending delete
+```
+
+### `s3-folder-sync sync`
+
+Force a single sync cycle immediately, then exit. Useful for one-off syncs or cron jobs.
+
+```bash
+s3-folder-sync sync --path ~/Workspace
+```
+
+### `s3-folder-sync conflicts`
+
+List or clean conflict files. Conflict files are created when the same file is edited on two machines before either syncs. The remote version becomes the canonical file, and the local version is saved as `<name>.conflict.<machine-id>.<timestamp>.<ext>`.
+
+```bash
+# List conflict files
+s3-folder-sync conflicts --path ~/Workspace
+
+# Delete all conflict files
+s3-folder-sync conflicts --clean --path ~/Workspace
+```
+
+Conflict files are local-only — they are never synced to remote storage.
+
+### `s3-folder-sync menubar`
+
+Launch a macOS menu bar app showing sync status. Requires the `menubar` extra (`pip install -e ".[menubar]"`).
+
+```bash
+s3-folder-sync menubar --path ~/Workspace
+```
+
+### Global flags
+
+| Flag | Description |
+|------|-------------|
+| `-v` / `--verbose` | Enable debug logging |
 
 ## How Sync Works
 
-1. **Scan local** — detect new, modified, and deleted files
-2. **List remote** — query S3 for current objects
-3. **Diff** — compare local state, remote state, and last-known-synced state (SQLite)
-4. **Resolve**:
-   - Changed locally only → push to S3
-   - Changed remotely only → pull from S3
-   - Changed on both sides → **conflict**: remote wins, local saved as `file.conflict.<machine>.<timestamp>.ext`
-   - Deleted locally → schedule remote delete (with grace period)
-   - Deleted remotely → move local to `.s3sync/trash/`
-5. **Edit always wins over delete** — if one machine edits and another deletes, the edit is preserved
+Each sync cycle:
+
+1. **Scan local** — walk the directory, hash every file, compare against last-known state in SQLite
+2. **List remote** — query storage for current objects and their metadata
+3. **Diff** — compare local state, remote state, and last-synced state to determine what changed
+4. **Resolve and execute:**
+
+| Scenario | Action |
+|----------|--------|
+| New local file | Push to remote |
+| New remote file | Pull to local |
+| Local edit only | Push to remote |
+| Remote edit only | Pull to local |
+| Both edited (same content) | No-op |
+| Both edited (different content) | **Conflict** — pull remote as canonical, save local as `.conflict.*` |
+| Deleted locally | Schedule remote delete (after grace period) |
+| Deleted remotely | Move local to `.s3sync/trash/<date>/` |
+| One side edited, other deleted | Edit wins (safer) |
 
 ## Configuration
 
@@ -91,20 +185,21 @@ Stored in `<watch-path>/.s3sync/config.toml`:
 
 ```toml
 [storage]
-endpoint = "https://storage.bunnycdn.com"
+endpoint = "https://syd.storage.bunnycdn.com"
 bucket = "my-zone"
-prefix = "workspace/"
-region = "us-east-1"
-access_key = ""
-secret_key = ""
+prefix = ""
+region = "syd"
+access_key = "your-key"
+secret_key = "your-key"
+backend = "bunny"   # "s3" or "bunny"
 
 [sync]
 interval = 10          # seconds between sync cycles
-debounce = 2.0         # seconds to wait after file change
-delete_grace_period = 300  # seconds before propagating deletes
+debounce = 2.0         # seconds to wait after file change before syncing
+delete_grace_period = 300  # seconds before propagating deletes to remote
 
 [machine]
-id = "mac-1"           # unique per machine
+id = "mac-1"           # unique per machine, used in conflict filenames
 
 [ignore]
 patterns = [
@@ -113,30 +208,131 @@ patterns = [
   ".git/**",
   "node_modules/**",
   ".s3sync/**",
+  "*.conflict.*",
 ]
+```
+
+## Local Testing Guide
+
+You can verify bidirectional sync on a single machine by using two separate folders that act as two "machines".
+
+### 1. Set up storage
+
+Use any S3-compatible service, or for fully local testing, run [MinIO](https://min.io/):
+
+```bash
+# Option A: Use an existing bucket (AWS, Bunny, R2, etc.)
+# Option B: Run MinIO locally
+docker run -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data --console-address ":9001"
+
+# Create a bucket via the MinIO console at http://localhost:9001
+# or with: aws --endpoint-url http://localhost:9000 s3 mb s3://test-sync
+```
+
+### 2. Create two folders
+
+```bash
+mkdir -p ~/test-sync/machine-1
+mkdir -p ~/test-sync/machine-2
+```
+
+### 3. Initialize both with the same bucket, different machine IDs
+
+```bash
+# Machine 1
+s3-folder-sync init \
+  --path ~/test-sync/machine-1 \
+  --endpoint http://localhost:9000 \
+  --bucket test-sync \
+  --access-key minioadmin \
+  --secret-key minioadmin \
+  --machine-id machine-1 \
+  --backend s3
+
+# Machine 2
+s3-folder-sync init \
+  --path ~/test-sync/machine-2 \
+  --endpoint http://localhost:9000 \
+  --bucket test-sync \
+  --access-key minioadmin \
+  --secret-key minioadmin \
+  --machine-id machine-2 \
+  --backend s3
+```
+
+### 4. Start both daemons (use two terminals)
+
+```bash
+# Terminal 1
+s3-folder-sync start --path ~/test-sync/machine-1
+
+# Terminal 2
+s3-folder-sync start --path ~/test-sync/machine-2
+```
+
+### 5. Test sync
+
+```bash
+# Create a file on machine-1
+echo "hello from machine 1" > ~/test-sync/machine-1/test.md
+
+# Wait ~10 seconds, then check machine-2
+cat ~/test-sync/machine-2/test.md
+# Output: hello from machine 1
+
+# Edit on machine-2
+echo "edited on machine 2" >> ~/test-sync/machine-2/test.md
+
+# Wait ~10 seconds, then check machine-1
+cat ~/test-sync/machine-1/test.md
+# Output: hello from machine 1
+#         edited on machine 2
+```
+
+### 6. Test conflict resolution
+
+```bash
+# Stop both daemons (Ctrl+C in each terminal)
+
+# Edit the same file on both sides
+echo "version A" > ~/test-sync/machine-1/test.md
+echo "version B" > ~/test-sync/machine-2/test.md
+
+# Sync machine-1 first (pushes "version A" to remote)
+s3-folder-sync sync --path ~/test-sync/machine-1
+
+# Sync machine-2 (detects conflict)
+s3-folder-sync sync --path ~/test-sync/machine-2
+# machine-2/test.md now contains "version A" (remote wins)
+# machine-2/test.md.conflict.machine-2.<timestamp>.md contains "version B"
+
+# List and clean conflicts
+s3-folder-sync conflicts --path ~/test-sync/machine-2
+s3-folder-sync conflicts --clean --path ~/test-sync/machine-2
 ```
 
 ---
 
 ## Runbook: Setting Up with Bunny.net
 
-Bunny.net offers Edge Storage with an S3-compatible API (currently in preview). Here's how to set it up.
+Bunny.net offers Edge Storage with a native REST API. This tool has a built-in Bunny backend (`--backend bunny`) that works with it directly.
 
 ### 1. Create a Storage Zone
 
 1. Log in to [bunny.net dashboard](https://dash.bunny.net)
-2. Go to **Storage** → **Add Storage Zone**
+2. Go to **Storage** > **Add Storage Zone**
 3. Name it (e.g. `workspace-sync`)
 4. Select your **primary region** (pick the one closest to you)
-5. Optionally enable replication regions for redundancy
 
 ### 2. Get Your Credentials
 
-1. Go to **Storage** → select your zone → **FTP & API Access**
-2. Note the **Password** — this is your storage API key
-3. Note the **Hostname** — this is your endpoint (e.g. `storage.bunnycdn.com`)
+1. Go to **Storage** > select your zone > **FTP & API Access**
+2. Note the **Password** — this is your access key
+3. Note the **Hostname** — this is your endpoint
 
-The endpoint varies by region:
 | Region | Endpoint |
 |--------|----------|
 | Falkenstein (EU) | `storage.bunnycdn.com` |
@@ -146,24 +342,18 @@ The endpoint varies by region:
 | Sydney (AU) | `syd.storage.bunnycdn.com` |
 | London (UK) | `uk.storage.bunnycdn.com` |
 
-> **Note:** Bunny.net's S3-compatible API is in closed preview as of early 2026. If S3 compatibility isn't available on your zone yet, check [their blog](https://bunny.net/blog/) for updates on GA availability. In the meantime, you can use any other S3-compatible provider (AWS S3, Cloudflare R2, MinIO, Backblaze B2).
-
-### 3. Initialize on Machine 1
+### 3. Initialize and start
 
 ```bash
 s3-folder-sync init \
   --path ~/Workspace \
-  --endpoint https://storage.bunnycdn.com \
-  --bucket my-zone-name \
-  --prefix "workspace/" \
+  --endpoint https://syd.storage.bunnycdn.com \
+  --bucket your-zone-name \
   --access-key "your-storage-password" \
   --secret-key "your-storage-password" \
-  --machine-id mac-1
-```
+  --machine-id mac-1 \
+  --backend bunny
 
-### 4. Start the Daemon on Machine 1
-
-```bash
 # Test with a foreground run first
 s3-folder-sync start --path ~/Workspace
 
@@ -171,40 +361,31 @@ s3-folder-sync start --path ~/Workspace
 s3-folder-sync start --path ~/Workspace -d
 ```
 
-### 5. Set Up Machine 2
+### 4. Set up the second machine
 
-Repeat the init with a **different machine-id**:
+Same steps, different `--machine-id`:
 
 ```bash
 s3-folder-sync init \
   --path ~/Workspace \
-  --endpoint https://storage.bunnycdn.com \
-  --bucket my-zone-name \
-  --prefix "workspace/" \
+  --endpoint https://syd.storage.bunnycdn.com \
+  --bucket your-zone-name \
   --access-key "your-storage-password" \
   --secret-key "your-storage-password" \
-  --machine-id mac-2
+  --machine-id mac-2 \
+  --backend bunny
 
+# Pull existing files, then start daemon
+s3-folder-sync sync --path ~/Workspace
 s3-folder-sync start --path ~/Workspace -d
 ```
 
-### 6. Verify Sync
+### 5. Run on login (macOS)
+
+Create a Launch Agent to start automatically:
 
 ```bash
-# On Mac 1
-echo "hello from mac 1" > ~/Workspace/test-sync.md
-
-# Wait ~10 seconds, then on Mac 2
-cat ~/Workspace/test-sync.md
-# Should show: hello from mac 1
-```
-
-### 7. Run on Login (macOS)
-
-Create a Launch Agent to start the daemon automatically:
-
-```bash
-cat > ~/Library/LaunchAgents/com.s3foldersync.plist << 'EOF'
+cat > ~/Library/LaunchAgents/com.s3foldersync.plist << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -213,10 +394,10 @@ cat > ~/Library/LaunchAgents/com.s3foldersync.plist << 'EOF'
     <string>com.s3foldersync</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/path/to/s3-folder-sync</string>
+        <string>$(which s3-folder-sync)</string>
         <string>start</string>
         <string>--path</string>
-        <string>/Users/you/Workspace</string>
+        <string>$HOME/Workspace</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -233,8 +414,6 @@ EOF
 launchctl load ~/Library/LaunchAgents/com.s3foldersync.plist
 ```
 
-Replace `/path/to/s3-folder-sync` with the actual path (find it with `which s3-folder-sync`).
-
 ### Troubleshooting
 
 | Problem | Solution |
@@ -242,13 +421,15 @@ Replace `/path/to/s3-folder-sync` with the actual path (find it with `which s3-f
 | "No config found" | Run `s3-folder-sync init` in the target directory first |
 | Auth errors | Verify your storage zone password in the Bunny dashboard |
 | Files not syncing | Check `s3-folder-sync status`, run with `-v` for debug logs |
-| Conflict files appearing | Both machines edited the same file — review `.conflict.*` files and keep the version you want |
+| Conflict files appearing | Both machines edited the same file. Review `.conflict.*` files, keep what you want, then `conflicts --clean` |
 | Daemon won't start | Check if one is already running: `s3-folder-sync status` |
 
 ## Development
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+git clone https://github.com/gayanhewa/s3-folder-sync.git
+cd s3-folder-sync
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
